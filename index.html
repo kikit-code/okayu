@@ -287,6 +287,11 @@ body.expanded .dockrow #yt-box{grid-column:1/-1}
       <p class="msg" id="d-msg"></p>
     </div>
 
+    <div class="panel">
+      <h3>車・ロック画面のボタン診断</h3>
+      <p class="hint">車の「次へ」「戻る」を押したときにこのページが受け取った反応を記録します。うまく動かないときは、ここに出た内容を教えてください。</p>
+      <pre id="car-log" style="margin:0;white-space:pre-wrap;font-size:12px;color:var(--muted);max-height:220px;overflow:auto">まだ記録はありません</pre>
+    </div>
     <div class="note">
       <b>iPhone でのバックグラウンド再生について</b><br>
       Safari では画面ロックやアプリ切り替えで YouTube の再生が止まります。止まったらロック画面のコントロールから再生ボタンを押すと続きが流れることがあります。PiP を使うときは、下のプレイヤーを「大きく表示」にして動画を全画面にし、左上の PiP ボタンを押してください。曲が切り替わると PiP が閉じる場合があります。
@@ -520,6 +525,7 @@ function onState(e){
   playing=e.data===YT.PlayerState.PLAYING;
   $("#i-play").hidden=playing;$("#i-pause").hidden=!playing;
   if(playing&&current){const d=yt.getDuration();if(d&&!store.durs[current.videoId]){store.durs[current.videoId]=Math.round(d);save()}}
+  carLog("状態: "+({"-1":"未開始","0":"終了","1":"再生","2":"一時停止","3":"読み込み中","5":"待機"}[e.data]??e.data));
   if(e.data===YT.PlayerState.ENDED)onEnded();
   if("mediaSession"in navigator)navigator.mediaSession.playbackState=playing?"playing":"paused";
 }
@@ -539,7 +545,7 @@ function loadCurrent(autoplay=true){
   if(!ready)return;
   const opt={videoId:current.videoId,startSeconds:current.start||0};
   if(current.end!=null)opt.endSeconds=current.end;
-  autoplay?yt.loadVideoById(opt):yt.cueVideoById(opt);
+  markSeek();autoplay?yt.loadVideoById(opt):yt.cueVideoById(opt);
 }
 function setQueue(ids,start=0){queue=[...ids];qi=start;current=byId(queue[qi]);saveQ();loadCurrent(true)}
 function playNow(id){const i=queue.indexOf(id);if(i>=0){qi=i}else{queue.splice(qi+1,0,id);qi=qi+1}current=byId(id);saveQ();loadCurrent(true)}
@@ -554,16 +560,36 @@ function next(auto=false){
 }
 function prev(){
   if(!queue.length)return;
-  if(ready&&current&&yt.getCurrentTime()-(current.start||0)>4){yt.seekTo(current.start||0,true);return}
+  if(ready&&current&&yt.getCurrentTime()-(current.start||0)>4){markSeek();yt.seekTo(current.start||0,true);return}
   if(qi>0)qi--;else if(store.settings.repeat==="all")qi=queue.length-1;
   current=byId(queue[qi]);saveQ();loadCurrent(true);
 }
 function saveQ(){store.queue={ids:queue,i:qi};save()}
 // 進捗＆終了監視（endSeconds が効かない場合の保険）
 let seeking=false;
+/* 車・ロック画面のボタン対策：iPhoneでは音がYouTube側で鳴るため、次へ/戻るが「15秒送り/戻し」として届くことがある。
+   自分で操作していないのに10・15・30秒前後の飛びが起きたら、次の曲／前の曲として扱う */
+let ownSeek=0,lastT=null,lastTs=0,wasPlaying=false;const carEvents=[];
+function markSeek(){ownSeek=Date.now();lastT=null}
+function carLog(m){const d=new Date();carEvents.unshift(`${d.toLocaleTimeString("ja-JP")} ${m}`);carEvents.length=Math.min(carEvents.length,30);const el=document.getElementById("car-log");if(el)el.textContent=carEvents.join("\n")}
+function carSkip(dir,from){
+  endedGuard=Date.now();markSeek();
+  if(dir>0){carLog("→ 次の曲へ");next()}
+  else{const st=current.start||0;if(from-st>8){carLog("→ 曲の頭へ");yt.seekTo(st,true)}else{carLog("→ 前の曲へ");if(qi>0)qi--;else if(store.settings.repeat==="all")qi=queue.length-1;current=byId(queue[qi]);saveQ();loadCurrent(true)}}
+}
 setInterval(()=>{
   if(!ready||!current||!yt.getCurrentTime)return;
   const t=yt.getCurrentTime(),st=current.start||0;
+  const now=Date.now();
+  if(lastT!=null&&wasPlaying&&now-ownSeek>2500&&!seeking){
+    const d=t-(lastT+(playing?(now-lastTs)/1000:0)),ad=Math.abs(d);
+    if(ad>3){
+      const skip=(ad>8&&ad<12)||(ad>13&&ad<17)||(ad>27&&ad<33);
+      carLog(`位置の飛び ${d>0?"+":""}${d.toFixed(1)}秒${skip?"（ボタン操作と判断）":""}`);
+      if(skip&&queue.length){const from=lastT;lastT=null;carSkip(d>0?1:-1,from);return}
+    }
+  }
+  lastT=t;lastTs=now;wasPlaying=playing;
   let end=current.end;const vd=yt.getDuration&&yt.getDuration();if(end==null&&vd)end=vd;
   const len=end!=null?end-st:null;
   if(!seeking){$("#p-cur").textContent=fmt(t-st);$("#p-dur").textContent=len?fmt(len):"–:––";$("#p-seek").value=len?Math.min(1000,Math.max(0,(t-st)/len*1000)):0}
@@ -571,7 +597,7 @@ setInterval(()=>{
   if(playing&&t<st-2&&current.type==="karaoke"){} // ユーザーが手動で戻した場合は何もしない
 },400);
 $("#p-seek").addEventListener("input",()=>{seeking=true});
-$("#p-seek").addEventListener("change",e=>{seeking=false;if(!ready||!current)return;const st=current.start||0;let end=current.end??yt.getDuration();yt.seekTo(st+(end-st)*e.target.value/1000,true)});
+$("#p-seek").addEventListener("change",e=>{seeking=false;if(!ready||!current)return;const st=current.start||0;let end=current.end??yt.getDuration();markSeek();yt.seekTo(st+(end-st)*e.target.value/1000,true)});
 $("#b-play").onclick=()=>{if(!current){const a=filtered();if(a.length)setQueue(a.map(s=>s.id));return}if(!ready)return;playing?yt.pauseVideo():yt.playVideo()};
 $("#b-next").onclick=()=>next(false);
 $("#b-prev").onclick=prev;
@@ -582,7 +608,7 @@ $("#b-expand").onclick=()=>{document.body.classList.toggle("expanded");$("#b-exp
 $("#b-queue").onclick=()=>{$("#queue").hidden=!$("#queue").hidden;renderQueue()};
 $("#q-close").onclick=()=>$("#queue").hidden=true;
 $("#q-clear").onclick=()=>{queue=current?[current.id]:[];qi=current?0:-1;saveQ();renderQueue()};
-if("mediaSession"in navigator){try{navigator.mediaSession.setActionHandler("nexttrack",()=>next());navigator.mediaSession.setActionHandler("previoustrack",prev);navigator.mediaSession.setActionHandler("play",()=>ready&&yt.playVideo());navigator.mediaSession.setActionHandler("pause",()=>ready&&yt.pauseVideo())}catch(e){}}
+if("mediaSession"in navigator){try{navigator.mediaSession.setActionHandler("nexttrack",()=>{carLog("ボタン: 次へ");next()});navigator.mediaSession.setActionHandler("seekforward",()=>{carLog("ボタン: 早送り");next()});navigator.mediaSession.setActionHandler("seekbackward",()=>{carLog("ボタン: 巻き戻し");prev()});navigator.mediaSession.setActionHandler("previoustrack",prev);navigator.mediaSession.setActionHandler("play",()=>ready&&yt.playVideo());navigator.mediaSession.setActionHandler("pause",()=>ready&&yt.pauseVideo())}catch(e){}}
 document.addEventListener("keydown",e=>{if(e.target.matches("input,textarea,select"))return;if(e.code==="Space"){e.preventDefault();$("#b-play").click()}else if(e.key==="ArrowRight"&&e.shiftKey)next();else if(e.key==="ArrowLeft"&&e.shiftKey)prev()});
 
 /* ===== 曲操作（イベント委譲） ===== */

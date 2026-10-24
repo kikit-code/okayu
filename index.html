@@ -287,13 +287,6 @@ body.expanded .dockrow #yt-box{grid-column:1/-1}
       <p class="msg" id="d-msg"></p>
     </div>
 
-    <div class="panel">
-      <h3>車・ロック画面のボタン診断</h3>
-      <p class="hint">車の「次へ」「戻る」を押したときにこのページが受け取った反応を記録します。うまく動かないときは、ここに出た内容を教えてください。</p>
-      <div class="row"><button class="btn primary" id="car-mode">車モード（実験）をオンにする</button></div>
-      <p class="hint">曲を再生してからオンにしてください。ページ側でも無音の音声を流して、車のボタンをこのページで受け取れるか試します。YouTube の音が止まるなど不具合が出たら、もう一度押してオフにしてください。</p>
-      <pre id="car-log" style="margin:0;white-space:pre-wrap;font-size:12px;color:var(--muted);max-height:220px;overflow:auto">まだ記録はありません</pre>
-    </div>
     <div class="note">
       <b>iPhone でのバックグラウンド再生について</b><br>
       Safari では画面ロックやアプリ切り替えで YouTube の再生が止まります。止まったらロック画面のコントロールから再生ボタンを押すと続きが流れることがあります。PiP を使うときは、下のプレイヤーを「大きく表示」にして動画を全画面にし、左上の PiP ボタンを押してください。曲が切り替わると PiP が閉じる場合があります。
@@ -517,6 +510,7 @@ document.querySelectorAll("nav.tabs button").forEach(b=>b.onclick=()=>go(b.datas
 document.addEventListener("click",e=>{const g=e.target.closest("[data-goto]");if(g)go(g.dataset.goto)});
 
 /* ===== プレイヤー ===== */
+let loadedVideo=null;
 let yt=null,ready=false,queue=[],qi=-1,current=null,playing=false,pendingSeekEnd=false;
 const tag=document.createElement("script");tag.src="https://www.youtube.com/iframe_api";document.head.appendChild(tag);
 window.onYouTubeIframeAPIReady=()=>{
@@ -527,7 +521,6 @@ function onState(e){
   playing=e.data===YT.PlayerState.PLAYING;
   $("#i-play").hidden=playing;$("#i-pause").hidden=!playing;
   if(playing&&current){const d=yt.getDuration();if(d&&!store.durs[current.videoId]){store.durs[current.videoId]=Math.round(d);save()}}
-  carLog("状態: "+({"-1":"未開始","0":"終了","1":"再生","2":"一時停止","3":"読み込み中","5":"待機"}[e.data]??e.data));
   if(e.data===YT.PlayerState.ENDED)onEnded();
   if("mediaSession"in navigator)navigator.mediaSession.playbackState=playing?"playing":"paused";
 }
@@ -545,9 +538,13 @@ function loadCurrent(autoplay=true){
   document.querySelectorAll(`li[data-id="${CSS.escape(current.id)}"]`).forEach(l=>l.classList.add("playing"));
   renderQueue();
   if(!ready)return;
+  /* 同じ動画（同じ歌枠）の中で曲が変わるときは読み込み直さずに位置だけ移動する。
+     動画を読み込み直すと iPhone の PiP が閉じてしまうため。曲の終わりは下の監視ループで判定する */
+  const st=yt.getPlayerState?yt.getPlayerState():-1;
+  if(autoplay&&loadedVideo===current.videoId&&[1,2,3].includes(st)){yt.seekTo(current.start||0,true);if(st!==1)yt.playVideo();return}
   const opt={videoId:current.videoId,startSeconds:current.start||0};
-  if(current.end!=null)opt.endSeconds=current.end;
-  markSeek();autoplay?yt.loadVideoById(opt):yt.cueVideoById(opt);
+  loadedVideo=current.videoId;
+  autoplay?yt.loadVideoById(opt):yt.cueVideoById(opt);
 }
 function setQueue(ids,start=0){queue=[...ids];qi=start;current=byId(queue[qi]);saveQ();loadCurrent(true)}
 function playNow(id){const i=queue.indexOf(id);if(i>=0){qi=i}else{queue.splice(qi+1,0,id);qi=qi+1}current=byId(id);saveQ();loadCurrent(true)}
@@ -562,52 +559,16 @@ function next(auto=false){
 }
 function prev(){
   if(!queue.length)return;
-  if(ready&&current&&yt.getCurrentTime()-(current.start||0)>4){markSeek();yt.seekTo(current.start||0,true);return}
+  if(ready&&current&&yt.getCurrentTime()-(current.start||0)>4){yt.seekTo(current.start||0,true);return}
   if(qi>0)qi--;else if(store.settings.repeat==="all")qi=queue.length-1;
   current=byId(queue[qi]);saveQ();loadCurrent(true);
 }
 function saveQ(){store.queue={ids:queue,i:qi};save()}
 // 進捗＆終了監視（endSeconds が効かない場合の保険）
 let seeking=false;
-/* 車・ロック画面のボタン対策：iPhoneでは音がYouTube側で鳴るため、次へ/戻るが「15秒送り/戻し」として届くことがある。
-   自分で操作していないのに10・15・30秒前後の飛びが起きたら、次の曲／前の曲として扱う */
-let ownSeek=0,lastT=null,lastTs=0,wasPlaying=false;const carEvents=[];
-let carAudio=null;
-function silentUrl(sec=60){const sr=8000,n=sr*sec,b=new ArrayBuffer(44+n),v=new DataView(b);const w=(o,s)=>[...s].forEach((c,i)=>v.setUint8(o+i,c.charCodeAt(0)));w(0,"RIFF");v.setUint32(4,36+n,true);w(8,"WAVEfmt ");v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);v.setUint32(24,sr,true);v.setUint32(28,sr,true);v.setUint16(32,1,true);v.setUint16(34,8,true);w(36,"data");v.setUint32(40,n,true);new Uint8Array(b,44).fill(128);return URL.createObjectURL(new Blob([b],{type:"audio/wav"}))}
-function setCarMode(on){
-  const btn=document.getElementById("car-mode");
-  if(on){
-    if(!carAudio){carAudio=new Audio(silentUrl());carAudio.loop=true;carAudio.setAttribute("playsinline","");
-      ["play","pause","ended"].forEach(ev=>carAudio.addEventListener(ev,()=>carLog("無音音声: "+({play:"再生",pause:"停止",ended:"終了"}[ev]))));
-      carAudio.addEventListener("pause",()=>{if(carAudio&&carAudio.dataset.on==="1"&&ready&&playing){carLog("→ 車の一時停止と判断");yt.pauseVideo()}});
-      carAudio.addEventListener("play",()=>{if(ready&&!playing&&current&&carAudio.dataset.on==="1")yt.playVideo()});}
-    carAudio.dataset.on="1";
-    carAudio.play().then(()=>{carLog("車モード: オン");if(current&&"mediaSession"in navigator){try{navigator.mediaSession.metadata=new MediaMetadata({title:current.title,artist:current.artist||"猫又おかゆ",album:"おかゆのうた",artwork:[{src:`https://i.ytimg.com/vi/${current.videoId}/hqdefault.jpg`,sizes:"480x360",type:"image/jpeg"}]});navigator.mediaSession.playbackState="playing"}catch(e){}}}).catch(e=>carLog("車モード: 開始できませんでした ("+e.name+")"));
-    btn.textContent="車モード（実験）をオフにする";
-  }else{
-    if(carAudio){carAudio.dataset.on="0";carAudio.pause()}carLog("車モード: オフ");btn.textContent="車モード（実験）をオンにする";
-  }
-}
-function markSeek(){ownSeek=Date.now();lastT=null}
-function carLog(m){const d=new Date();carEvents.unshift(`${d.toLocaleTimeString("ja-JP")} ${m}`);carEvents.length=Math.min(carEvents.length,30);const el=document.getElementById("car-log");if(el)el.textContent=carEvents.join("\n")}
-function carSkip(dir,from){
-  endedGuard=Date.now();markSeek();
-  if(dir>0){carLog("→ 次の曲へ");next()}
-  else{const st=current.start||0;if(from-st>8){carLog("→ 曲の頭へ");yt.seekTo(st,true)}else{carLog("→ 前の曲へ");if(qi>0)qi--;else if(store.settings.repeat==="all")qi=queue.length-1;current=byId(queue[qi]);saveQ();loadCurrent(true)}}
-}
 setInterval(()=>{
   if(!ready||!current||!yt.getCurrentTime)return;
   const t=yt.getCurrentTime(),st=current.start||0;
-  const now=Date.now();
-  if(lastT!=null&&wasPlaying&&now-ownSeek>2500&&!seeking){
-    const d=t-(lastT+(playing?(now-lastTs)/1000:0)),ad=Math.abs(d);
-    if(ad>3){
-      const skip=(ad>8&&ad<12)||(ad>13&&ad<17)||(ad>27&&ad<33);
-      carLog(`位置の飛び ${d>0?"+":""}${d.toFixed(1)}秒${skip?"（ボタン操作と判断）":""}`);
-      if(skip&&queue.length){const from=lastT;lastT=null;carSkip(d>0?1:-1,from);return}
-    }
-  }
-  lastT=t;lastTs=now;wasPlaying=playing;
   let end=current.end;const vd=yt.getDuration&&yt.getDuration();if(end==null&&vd)end=vd;
   const len=end!=null?end-st:null;
   if(!seeking){$("#p-cur").textContent=fmt(t-st);$("#p-dur").textContent=len?fmt(len):"–:––";$("#p-seek").value=len?Math.min(1000,Math.max(0,(t-st)/len*1000)):0}
@@ -615,7 +576,7 @@ setInterval(()=>{
   if(playing&&t<st-2&&current.type==="karaoke"){} // ユーザーが手動で戻した場合は何もしない
 },400);
 $("#p-seek").addEventListener("input",()=>{seeking=true});
-$("#p-seek").addEventListener("change",e=>{seeking=false;if(!ready||!current)return;const st=current.start||0;let end=current.end??yt.getDuration();markSeek();yt.seekTo(st+(end-st)*e.target.value/1000,true)});
+$("#p-seek").addEventListener("change",e=>{seeking=false;if(!ready||!current)return;const st=current.start||0;let end=current.end??yt.getDuration();yt.seekTo(st+(end-st)*e.target.value/1000,true)});
 $("#b-play").onclick=()=>{if(!current){const a=filtered();if(a.length)setQueue(a.map(s=>s.id));return}if(!ready)return;playing?yt.pauseVideo():yt.playVideo()};
 $("#b-next").onclick=()=>next(false);
 $("#b-prev").onclick=prev;
@@ -626,7 +587,7 @@ $("#b-expand").onclick=()=>{document.body.classList.toggle("expanded");$("#b-exp
 $("#b-queue").onclick=()=>{$("#queue").hidden=!$("#queue").hidden;renderQueue()};
 $("#q-close").onclick=()=>$("#queue").hidden=true;
 $("#q-clear").onclick=()=>{queue=current?[current.id]:[];qi=current?0:-1;saveQ();renderQueue()};
-if("mediaSession"in navigator){try{navigator.mediaSession.setActionHandler("nexttrack",()=>{carLog("ボタン: 次へ");next()});navigator.mediaSession.setActionHandler("seekforward",()=>{carLog("ボタン: 早送り");next()});navigator.mediaSession.setActionHandler("seekbackward",()=>{carLog("ボタン: 巻き戻し");prev()});navigator.mediaSession.setActionHandler("previoustrack",()=>{carLog("ボタン: 戻る");prev()});navigator.mediaSession.setActionHandler("play",()=>{carLog("ボタン: 再生");ready&&yt.playVideo()});navigator.mediaSession.setActionHandler("pause",()=>{carLog("ボタン: 一時停止");ready&&yt.pauseVideo()})}catch(e){}}
+if("mediaSession"in navigator){try{navigator.mediaSession.setActionHandler("nexttrack",()=>next());navigator.mediaSession.setActionHandler("previoustrack",prev);navigator.mediaSession.setActionHandler("play",()=>ready&&yt.playVideo());navigator.mediaSession.setActionHandler("pause",()=>ready&&yt.pauseVideo())}catch(e){}}
 document.addEventListener("keydown",e=>{if(e.target.matches("input,textarea,select"))return;if(e.code==="Space"){e.preventDefault();$("#b-play").click()}else if(e.key==="ArrowRight"&&e.shiftKey)next();else if(e.key==="ArrowLeft"&&e.shiftKey)prev()});
 
 /* ===== 曲操作（イベント委譲） ===== */
@@ -795,7 +756,6 @@ $("#d-reset").onclick=()=>{$("#d-reset-row").hidden=false};
 $("#d-reset-cancel").onclick=()=>{$("#d-reset-row").hidden=true};
 $("#d-reset-do").onclick=()=>{Object.assign(store,{songs:[],streams:[],playlists:[],favs:[],hidden:[],hiddenStreams:[],queue:null});save();queue=[];qi=-1;$("#d-reset-row").hidden=true;renderAll();$("#d-msg").textContent="初期化しました。"};
 
-document.getElementById("car-mode").onclick=()=>setCarMode(!(carAudio&&carAudio.dataset.on==="1"));
 /* ===== 起動 ===== */
 paintModes();
 if(store.queue&&store.queue.ids&&store.queue.ids.length){queue=store.queue.ids.filter(id=>byId(id));qi=Math.min(Math.max(0,store.queue.i||0),queue.length-1);current=byId(queue[qi])||null;if(current){$("#p-title").textContent=current.title;$("#p-sub").textContent=current.artist||"猫又おかゆ"}}

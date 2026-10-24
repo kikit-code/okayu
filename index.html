@@ -290,6 +290,8 @@ body.expanded .dockrow #yt-box{grid-column:1/-1}
     <div class="panel">
       <h3>車・ロック画面のボタン診断</h3>
       <p class="hint">車の「次へ」「戻る」を押したときにこのページが受け取った反応を記録します。うまく動かないときは、ここに出た内容を教えてください。</p>
+      <div class="row"><button class="btn primary" id="car-mode">車モード（実験）をオンにする</button></div>
+      <p class="hint">曲を再生してからオンにしてください。ページ側でも無音の音声を流して、車のボタンをこのページで受け取れるか試します。YouTube の音が止まるなど不具合が出たら、もう一度押してオフにしてください。</p>
       <pre id="car-log" style="margin:0;white-space:pre-wrap;font-size:12px;color:var(--muted);max-height:220px;overflow:auto">まだ記録はありません</pre>
     </div>
     <div class="note">
@@ -570,6 +572,22 @@ let seeking=false;
 /* 車・ロック画面のボタン対策：iPhoneでは音がYouTube側で鳴るため、次へ/戻るが「15秒送り/戻し」として届くことがある。
    自分で操作していないのに10・15・30秒前後の飛びが起きたら、次の曲／前の曲として扱う */
 let ownSeek=0,lastT=null,lastTs=0,wasPlaying=false;const carEvents=[];
+let carAudio=null;
+function silentUrl(sec=60){const sr=8000,n=sr*sec,b=new ArrayBuffer(44+n),v=new DataView(b);const w=(o,s)=>[...s].forEach((c,i)=>v.setUint8(o+i,c.charCodeAt(0)));w(0,"RIFF");v.setUint32(4,36+n,true);w(8,"WAVEfmt ");v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);v.setUint32(24,sr,true);v.setUint32(28,sr,true);v.setUint16(32,1,true);v.setUint16(34,8,true);w(36,"data");v.setUint32(40,n,true);new Uint8Array(b,44).fill(128);return URL.createObjectURL(new Blob([b],{type:"audio/wav"}))}
+function setCarMode(on){
+  const btn=document.getElementById("car-mode");
+  if(on){
+    if(!carAudio){carAudio=new Audio(silentUrl());carAudio.loop=true;carAudio.setAttribute("playsinline","");
+      ["play","pause","ended"].forEach(ev=>carAudio.addEventListener(ev,()=>carLog("無音音声: "+({play:"再生",pause:"停止",ended:"終了"}[ev]))));
+      carAudio.addEventListener("pause",()=>{if(carAudio&&carAudio.dataset.on==="1"&&ready&&playing){carLog("→ 車の一時停止と判断");yt.pauseVideo()}});
+      carAudio.addEventListener("play",()=>{if(ready&&!playing&&current&&carAudio.dataset.on==="1")yt.playVideo()});}
+    carAudio.dataset.on="1";
+    carAudio.play().then(()=>{carLog("車モード: オン");if(current&&"mediaSession"in navigator){try{navigator.mediaSession.metadata=new MediaMetadata({title:current.title,artist:current.artist||"猫又おかゆ",album:"おかゆのうた",artwork:[{src:`https://i.ytimg.com/vi/${current.videoId}/hqdefault.jpg`,sizes:"480x360",type:"image/jpeg"}]});navigator.mediaSession.playbackState="playing"}catch(e){}}}).catch(e=>carLog("車モード: 開始できませんでした ("+e.name+")"));
+    btn.textContent="車モード（実験）をオフにする";
+  }else{
+    if(carAudio){carAudio.dataset.on="0";carAudio.pause()}carLog("車モード: オフ");btn.textContent="車モード（実験）をオンにする";
+  }
+}
 function markSeek(){ownSeek=Date.now();lastT=null}
 function carLog(m){const d=new Date();carEvents.unshift(`${d.toLocaleTimeString("ja-JP")} ${m}`);carEvents.length=Math.min(carEvents.length,30);const el=document.getElementById("car-log");if(el)el.textContent=carEvents.join("\n")}
 function carSkip(dir,from){
@@ -608,7 +626,7 @@ $("#b-expand").onclick=()=>{document.body.classList.toggle("expanded");$("#b-exp
 $("#b-queue").onclick=()=>{$("#queue").hidden=!$("#queue").hidden;renderQueue()};
 $("#q-close").onclick=()=>$("#queue").hidden=true;
 $("#q-clear").onclick=()=>{queue=current?[current.id]:[];qi=current?0:-1;saveQ();renderQueue()};
-if("mediaSession"in navigator){try{navigator.mediaSession.setActionHandler("nexttrack",()=>{carLog("ボタン: 次へ");next()});navigator.mediaSession.setActionHandler("seekforward",()=>{carLog("ボタン: 早送り");next()});navigator.mediaSession.setActionHandler("seekbackward",()=>{carLog("ボタン: 巻き戻し");prev()});navigator.mediaSession.setActionHandler("previoustrack",prev);navigator.mediaSession.setActionHandler("play",()=>ready&&yt.playVideo());navigator.mediaSession.setActionHandler("pause",()=>ready&&yt.pauseVideo())}catch(e){}}
+if("mediaSession"in navigator){try{navigator.mediaSession.setActionHandler("nexttrack",()=>{carLog("ボタン: 次へ");next()});navigator.mediaSession.setActionHandler("seekforward",()=>{carLog("ボタン: 早送り");next()});navigator.mediaSession.setActionHandler("seekbackward",()=>{carLog("ボタン: 巻き戻し");prev()});navigator.mediaSession.setActionHandler("previoustrack",()=>{carLog("ボタン: 戻る");prev()});navigator.mediaSession.setActionHandler("play",()=>{carLog("ボタン: 再生");ready&&yt.playVideo()});navigator.mediaSession.setActionHandler("pause",()=>{carLog("ボタン: 一時停止");ready&&yt.pauseVideo()})}catch(e){}}
 document.addEventListener("keydown",e=>{if(e.target.matches("input,textarea,select"))return;if(e.code==="Space"){e.preventDefault();$("#b-play").click()}else if(e.key==="ArrowRight"&&e.shiftKey)next();else if(e.key==="ArrowLeft"&&e.shiftKey)prev()});
 
 /* ===== 曲操作（イベント委譲） ===== */
@@ -777,6 +795,7 @@ $("#d-reset").onclick=()=>{$("#d-reset-row").hidden=false};
 $("#d-reset-cancel").onclick=()=>{$("#d-reset-row").hidden=true};
 $("#d-reset-do").onclick=()=>{Object.assign(store,{songs:[],streams:[],playlists:[],favs:[],hidden:[],hiddenStreams:[],queue:null});save();queue=[];qi=-1;$("#d-reset-row").hidden=true;renderAll();$("#d-msg").textContent="初期化しました。"};
 
+document.getElementById("car-mode").onclick=()=>setCarMode(!(carAudio&&carAudio.dataset.on==="1"));
 /* ===== 起動 ===== */
 paintModes();
 if(store.queue&&store.queue.ids&&store.queue.ids.length){queue=store.queue.ids.filter(id=>byId(id));qi=Math.min(Math.max(0,store.queue.i||0),queue.length-1);current=byId(queue[qi])||null;if(current){$("#p-title").textContent=current.title;$("#p-sub").textContent=current.artist||"猫又おかゆ"}}

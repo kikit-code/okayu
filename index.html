@@ -192,6 +192,15 @@ body.expanded .dockrow #yt-box{grid-column:1/-1}
   <section class="view" data-view="home">
     <div class="sechead"><h2>ピックアップ</h2><div class="row"><button class="btn" id="pick-queue">全部キューに追加</button><button class="btn ghost" id="pick-reroll">入れ替え</button></div></div>
     <div class="grid" id="pick-grid"></div>
+    <div class="sechead"><h2>よく聴く曲</h2><button class="btn ghost" id="top-more">再生回数順で見る →</button></div>
+    <ul class="list" id="top-list"></ul>
+    <div class="empty" id="top-empty">曲を30秒以上聴くと、再生回数の多い曲がここに並びます。</div>
+    <section id="favcand-sec" style="display:flex;flex-direction:column;gap:10px" hidden>
+      <div class="sechead"><h2>お気に入り候補</h2><span class="count">3回以上聴いた、♡がまだの曲</span></div>
+      <ul class="list" id="favcand-list"></ul>
+    </section>
+    <div class="sechead"><h2>まだ聴いていない曲</h2><div class="row"><span class="count" id="unheard-count"></span><button class="btn" id="unheard-queue">全部キューに追加</button><button class="btn ghost" id="unheard-reroll">入れ替え</button></div></div>
+    <ul class="list" id="unheard-list"></ul>
     <div class="sechead"><h2>最新の楽曲</h2><button class="btn ghost" data-goto="songs">すべて見る →</button></div>
     <div class="grid" id="latest-grid"></div>
   </section>
@@ -205,6 +214,7 @@ body.expanded .dockrow #yt-box{grid-column:1/-1}
         <option value="old">古い順</option>
         <option value="title">曲名順</option>
         <option value="artist">アーティスト順</option>
+        <option value="plays">再生回数順</option>
       </select>
     </div>
     <div class="row" style="justify-content:space-between">
@@ -215,7 +225,7 @@ body.expanded .dockrow #yt-box{grid-column:1/-1}
         <button class="chip" data-type="karaoke" aria-pressed="false">歌枠</button>
         <button class="chip" data-type="fav" aria-pressed="false">♡ お気に入り</button>
       </div>
-      <div class="chips" id="flag-chips"><button class="chip" data-flag="live" aria-pressed="false">3D LIVE</button><button class="chip" data-flag="other" aria-pressed="false">他チャンネル</button><button class="chip" data-flag="own" aria-pressed="false">おかゆChのみ</button></div>
+      <div class="chips" id="flag-chips"><button class="chip" data-flag="live" aria-pressed="false">3D LIVE</button><button class="chip" data-flag="other" aria-pressed="false">他チャンネル</button><button class="chip" data-flag="own" aria-pressed="false">おかゆChのみ</button><button class="chip" data-flag="unheard" aria-pressed="false">未視聴</button></div>
       <div class="row"><span class="count" id="song-count"></span><button class="btn" id="songs-shuffle">シャッフル再生</button><button class="btn" id="songs-queue">表示中をキューへ</button></div>
     </div>
     <ul class="list" id="song-list"></ul>
@@ -283,7 +293,7 @@ body.expanded .dockrow #yt-box{grid-column:1/-1}
       </div>
       <label class="f" id="d-box-wrap" hidden>データ（JSON）<textarea id="d-box"></textarea></label>
       <div class="row" id="d-import-row" hidden><button class="btn primary" id="d-import-do">この内容で上書き</button><button class="btn ghost" id="d-import-merge">今のデータに追加</button></div>
-      <div class="row" id="d-reset-row" hidden><span class="hint">自分で追加した曲・歌枠・プレイリストが消えます。</span><button class="btn danger" id="d-reset-do">初期化する</button><button class="btn ghost" id="d-reset-cancel">やめる</button></div>
+      <div class="row" id="d-reset-row" hidden><span class="hint">自分で追加した曲・歌枠・プレイリスト・お気に入り・再生回数が消えます。</span><button class="btn danger" id="d-reset-do">初期化する</button><button class="btn ghost" id="d-reset-cancel">やめる</button></div>
       <p class="msg" id="d-msg"></p>
     </div>
 
@@ -404,7 +414,7 @@ const BUILTIN_STREAMS = DATA.st.map(([v,title,date,songs])=>({id:"hd:"+v,videoId
 
 /* ===== 保存 ===== */
 const LS="okayu-uta-v1";
-const store={songs:[],streams:[],playlists:[],favs:[],hidden:[],hiddenStreams:[],durs:{},settings:{shuffle:false,repeat:"off"}};
+const store={songs:[],streams:[],playlists:[],favs:[],hidden:[],hiddenStreams:[],plays:{},durs:{},settings:{shuffle:false,repeat:"off"}};
 function load(){try{const d=JSON.parse(localStorage.getItem(LS)||"{}");Object.assign(store,d);store.settings=Object.assign({shuffle:false,repeat:"off"},d.settings||{});}catch(e){}}
 let _all=null,_map=null;
 function save(){_all=null;_map=null;try{localStorage.setItem(LS,JSON.stringify(store));}catch(e){}}
@@ -447,27 +457,39 @@ const typeLabel={original:"オリ曲",cover:"歌ってみた",karaoke:"歌枠"};
 function card(s){const d=segLen(s);return `<button class="card" data-play="${esc(s.id)}"><div class="thumb"><img loading="lazy" src="${thumb(s.videoId)}" alt="">${d?`<span class="dur">${fmt(d)}</span>`:""}</div><div class="t">${esc(s.title)}</div><div class="a">${esc(s.artist||"")}</div></button>`}
 function row(s,ctx=""){
   const fav=store.favs.includes(s.id);const cur=current&&current.id===s.id;
-  const sub=[s.ch&&("@"+s.ch),s.artist,s.with&&("with "+s.with),s.type==="karaoke"?fmt(s.start)+"〜":"",s.date].filter(Boolean).join(" ・ ");
+  const pc=plays(s.id);const sub=[pc&&("▶ "+pc+"回"),s.ch&&("@"+s.ch),s.artist,s.with&&("with "+s.with),s.type==="karaoke"?fmt(s.start)+"〜":"",s.date].filter(Boolean).join(" ・ ");
   return `<li class="${cur?"playing":""}" data-id="${esc(s.id)}"><button class="mini" data-play="${esc(s.id)}" aria-label="再生"><img loading="lazy" src="${thumb(s.videoId)}" alt=""></button><button class="meta" data-play="${esc(s.id)}"><div class="t"><span class="tag ${s.type}">${typeLabel[s.type]||""}</span>${s.live?'<span class="tag live">3D</span>':""}${esc(s.title)}</div><div class="s">${esc(sub)}</div></button><div class="acts">${ctx}<button class="icon ${fav?"on":""}" data-fav="${esc(s.id)}" aria-label="お気に入り">${fav?IC.heart:IC.heartO}</button><button class="icon" data-queue="${esc(s.id)}" aria-label="キューに追加">${IC.add}</button><button class="icon" data-more="${esc(s.id)}" aria-label="その他">${IC.more}</button></div></li>`;
 }
 
 let pick=[];
 function rerollPick(){const a=allSongs();pick=[...a].sort(()=>Math.random()-.5).slice(0,10).map(s=>s.id)}
+let unheardPick=[];
+const plays=id=>(store.plays&&store.plays[id]&&store.plays[id].n)||0;
 function renderHome(){
   if(!pick.length)rerollPick();
   $("#pick-grid").innerHTML=pick.map(byId).filter(Boolean).map(card).join("");
   const latest=[...allSongs()].filter(s=>s.date).sort((a,b)=>b.date.localeCompare(a.date)||(a.start||0)-(b.start||0)).slice(0,10);
   $("#latest-grid").innerHTML=latest.map(card).join("");
+  const all=allSongs();
+  const heard=all.filter(s=>plays(s.id)).sort((a,b)=>(plays(b.id)-plays(a.id))||((store.plays[b.id].last||0)-(store.plays[a.id].last||0)));
+  $("#top-list").innerHTML=heard.slice(0,10).map(s=>row(s)).join("");$("#top-list").hidden=!heard.length;$("#top-empty").hidden=!!heard.length;
+  const cand=heard.filter(s=>plays(s.id)>=3&&!store.favs.includes(s.id)).slice(0,5);
+  $("#favcand-list").innerHTML=cand.map(s=>row(s)).join("");$("#favcand-sec").hidden=!cand.length;
+  const un=all.filter(s=>!plays(s.id));
+  unheardPick=unheardPick.filter(id=>!plays(id)&&byId(id));
+  if(unheardPick.length<Math.min(10,un.length))unheardPick=[...un].sort(()=>Math.random()-.5).slice(0,10).map(s=>s.id);
+  $("#unheard-count").textContent=`未視聴 ${un.length}曲 / 全${all.length}曲`;
+  $("#unheard-list").innerHTML=unheardPick.map(byId).filter(Boolean).map(s=>row(s)).join("");
 }
-let filterType="all",flags={live:false,other:false,own:false},streamFilter="all";
+let filterType="all",flags={live:false,other:false,own:false,unheard:false},streamFilter="all";
 function filtered(){
   const q=$("#q").value.trim().toLowerCase();
   let a=allSongs();
   if(filterType==="fav")a=a.filter(s=>store.favs.includes(s.id));else if(filterType!=="all")a=a.filter(s=>s.type===filterType);
-  if(flags.live)a=a.filter(s=>s.live);if(flags.other)a=a.filter(s=>s.ch);if(flags.own)a=a.filter(s=>!s.ch);
+  if(flags.live)a=a.filter(s=>s.live);if(flags.other)a=a.filter(s=>s.ch);if(flags.own)a=a.filter(s=>!s.ch);if(flags.unheard)a=a.filter(s=>!plays(s.id));
   if(q)a=a.filter(s=>[s.title,s.artist,s.with,s.streamTitle,s.ch].join(" ").toLowerCase().includes(q));
   const k=$("#sort").value;
-  a.sort((x,y)=>k==="title"?x.title.localeCompare(y.title,"ja"):k==="artist"?(x.artist||"").localeCompare(y.artist||"","ja"):k==="old"?(x.date||"9").localeCompare(y.date||"9")||(x.start||0)-(y.start||0):(y.date||"").localeCompare(x.date||"")||(x.start||0)-(y.start||0));
+  a.sort((x,y)=>k==="plays"?(plays(y.id)-plays(x.id))||((store.plays[y.id]?.last||0)-(store.plays[x.id]?.last||0)):k==="title"?x.title.localeCompare(y.title,"ja"):k==="artist"?(x.artist||"").localeCompare(y.artist||"","ja"):k==="old"?(x.date||"9").localeCompare(y.date||"9")||(x.start||0)-(y.start||0):(y.date||"").localeCompare(x.date||"")||(x.start||0)-(y.start||0));
   return a;
 }
 function renderSongs(){
@@ -537,6 +559,7 @@ function loadCurrent(autoplay=true){
   document.querySelectorAll("li.playing").forEach(l=>l.classList.remove("playing"));
   document.querySelectorAll(`li[data-id="${CSS.escape(current.id)}"]`).forEach(l=>l.classList.add("playing"));
   renderQueue();
+  listen={id:current.id,sec:0,counted:false,ts:Date.now()};
   if(!ready)return;
   /* 同じ動画（同じ歌枠）の中で曲が変わるときは読み込み直さずに位置だけ移動する。
      動画を読み込み直すと iPhone の PiP が閉じてしまうため。曲の終わりは下の監視ループで判定する */
@@ -566,11 +589,22 @@ function prev(){
 function saveQ(){store.queue={ids:queue,i:qi};save()}
 // 進捗＆終了監視（endSeconds が効かない場合の保険）
 let seeking=false;
+/* 視聴回数：1回の再生で30秒（短い曲は半分）以上聴いたら1回と数える。記録はこの端末の中だけ */
+let listen={id:null,sec:0,counted:false,ts:0};
 setInterval(()=>{
   if(!ready||!current||!yt.getCurrentTime)return;
   const t=yt.getCurrentTime(),st=current.start||0;
   let end=current.end;const vd=yt.getDuration&&yt.getDuration();if(end==null&&vd)end=vd;
   const len=end!=null?end-st:null;
+  const nowTs=Date.now();
+  if(listen.id===current.id&&!listen.counted){
+    if(playing)listen.sec+=Math.min(2,(nowTs-listen.ts)/1000);
+    if(listen.sec>=Math.min(30,len?len/2:30)){
+      listen.counted=true;const p=store.plays[current.id]||{n:0};store.plays[current.id]={n:p.n+1,last:nowTs};save();
+      if(!document.querySelector('section[data-view="home"]').hidden)renderHome();
+    }
+  }
+  listen.ts=nowTs;
   if(!seeking){$("#p-cur").textContent=fmt(t-st);$("#p-dur").textContent=len?fmt(len):"–:––";$("#p-seek").value=len?Math.min(1000,Math.max(0,(t-st)/len*1000)):0}
   if(playing&&current.end!=null&&t>=current.end+0.6)onEnded();
   if(playing&&t<st-2&&current.type==="karaoke"){} // ユーザーが手動で戻した場合は何もしない
@@ -604,7 +638,7 @@ document.addEventListener("click",e=>{
     else if(t.closest("#latest-grid")){const ids=[...document.querySelectorAll("#latest-grid [data-play]")].map(x=>x.dataset.play);setQueue(ids,ids.indexOf(d.play))}
     else playNow(d.play);
   }
-  else if(d.fav){const i=store.favs.indexOf(d.fav);i>=0?store.favs.splice(i,1):store.favs.push(d.fav);save();t.classList.toggle("on",i<0);t.innerHTML=i<0?IC.heart:IC.heartO;renderPlaylists();if(filterType==="fav")renderSongs()}
+  else if(d.fav){const i=store.favs.indexOf(d.fav);i>=0?store.favs.splice(i,1):store.favs.push(d.fav);save();t.classList.toggle("on",i<0);t.innerHTML=i<0?IC.heart:IC.heartO;renderPlaylists();if(filterType==="fav")renderSongs();if(t.closest("#favcand-list,#top-list"))renderHome()}
   else if(d.queue)enqueue([d.queue]);
   else if(d.more)openMenu(d.more,t);
   else if(d.qjump!=null){qi=+d.qjump;current=byId(queue[qi]);saveQ();loadCurrent(true)}
@@ -678,6 +712,9 @@ $("#type-chips").addEventListener("click",e=>{const b=e.target.closest(".chip");
 $("#songs-shuffle").onclick=()=>{const ids=filtered().map(s=>s.id).sort(()=>Math.random()-.5);if(ids.length)setQueue(ids)};
 $("#songs-queue").onclick=()=>{const ids=filtered().map(s=>s.id);if(ids.length)enqueue(ids)};
 $("#pick-reroll").onclick=()=>{rerollPick();renderHome()};
+$("#unheard-reroll").onclick=()=>{unheardPick=[];renderHome()};
+$("#unheard-queue").onclick=()=>{if(unheardPick.length)enqueue([...unheardPick])};
+$("#top-more").onclick=()=>{$("#sort").value="plays";flags.unheard=false;document.querySelector('[data-flag="unheard"]').setAttribute("aria-pressed","false");go("songs");renderSongs()};
 $("#pick-queue").onclick=()=>enqueue(pick);
 $("#pl-new-form").onsubmit=e=>{e.preventDefault();const n=$("#pl-new-name").value.trim();if(!n)return;const p={id:uid(),name:n,ids:[]};store.playlists.push(p);openPl=p.id;save();$("#pl-new-name").value="";renderPlaylists();toast(`「${n}」を作成しました`)};
 
@@ -738,7 +775,7 @@ $("#o-save").onclick=()=>{
 };
 
 /* ===== データ移行 ===== */
-function userData(){return {v:1,songs:store.songs,streams:store.streams,playlists:store.playlists,favs:store.favs,hidden:store.hidden,hiddenStreams:store.hiddenStreams}}
+function userData(){return {v:1,songs:store.songs,streams:store.streams,playlists:store.playlists,favs:store.favs,hidden:store.hidden,hiddenStreams:store.hiddenStreams,plays:store.plays}}
 $("#d-export").onclick=async()=>{
   const txt=JSON.stringify(userData());$("#d-box").value=txt;$("#d-box-wrap").hidden=false;$("#d-import-row").hidden=true;
   try{await navigator.clipboard.writeText(txt);$("#d-msg").textContent="コピーしました。メモやメッセージに貼り付けて、もう一方の端末へ送ってください。"}
@@ -746,15 +783,15 @@ $("#d-export").onclick=async()=>{
 };
 $("#d-import").onclick=()=>{$("#d-box").value="";$("#d-box-wrap").hidden=false;$("#d-import-row").hidden=false;$("#d-box").focus();$("#d-msg").textContent="書き出したデータを貼り付けてください。"};
 function readBox(){try{const d=JSON.parse($("#d-box").value);if(!d||!Array.isArray(d.streams))throw 0;return d}catch(e){$("#d-msg").textContent="データの形式が違います。書き出したものをそのまま貼り付けてください。";return null}}
-$("#d-import-do").onclick=()=>{const d=readBox();if(!d)return;Object.assign(store,{songs:d.songs||[],streams:d.streams||[],playlists:d.playlists||[],favs:d.favs||[],hidden:d.hidden||[],hiddenStreams:d.hiddenStreams||[]});save();renderAll();$("#d-msg").textContent="読み込みました。"};
+$("#d-import-do").onclick=()=>{const d=readBox();if(!d)return;Object.assign(store,{songs:d.songs||[],streams:d.streams||[],playlists:d.playlists||[],favs:d.favs||[],hidden:d.hidden||[],hiddenStreams:d.hiddenStreams||[],plays:d.plays||{}});save();renderAll();$("#d-msg").textContent="読み込みました。"};
 $("#d-import-merge").onclick=()=>{const d=readBox();if(!d)return;
   const addU=(arr,src,key="id")=>{const have=new Set(arr.map(x=>x[key]));(src||[]).forEach(x=>{if(!have.has(x[key]))arr.push(x)})};
   addU(store.songs,d.songs);addU(store.streams,d.streams,"videoId");addU(store.playlists,d.playlists);
-  store.favs=[...new Set([...store.favs,...(d.favs||[])])];store.hidden=[...new Set([...store.hidden,...(d.hidden||[])])];store.hiddenStreams=[...new Set([...store.hiddenStreams,...(d.hiddenStreams||[])])];
+  store.favs=[...new Set([...store.favs,...(d.favs||[])])];store.hidden=[...new Set([...store.hidden,...(d.hidden||[])])];store.hiddenStreams=[...new Set([...store.hiddenStreams,...(d.hiddenStreams||[])])];for(const [k,v] of Object.entries(d.plays||{})){const m=store.plays[k];store.plays[k]=m?{n:Math.max(m.n,v.n),last:Math.max(m.last||0,v.last||0)}:v}
   save();renderAll();$("#d-msg").textContent="今のデータに追加しました。"};
 $("#d-reset").onclick=()=>{$("#d-reset-row").hidden=false};
 $("#d-reset-cancel").onclick=()=>{$("#d-reset-row").hidden=true};
-$("#d-reset-do").onclick=()=>{Object.assign(store,{songs:[],streams:[],playlists:[],favs:[],hidden:[],hiddenStreams:[],queue:null});save();queue=[];qi=-1;$("#d-reset-row").hidden=true;renderAll();$("#d-msg").textContent="初期化しました。"};
+$("#d-reset-do").onclick=()=>{Object.assign(store,{songs:[],streams:[],playlists:[],favs:[],hidden:[],hiddenStreams:[],plays:{},queue:null});save();queue=[];qi=-1;$("#d-reset-row").hidden=true;renderAll();$("#d-msg").textContent="初期化しました。"};
 
 /* ===== 起動 ===== */
 paintModes();
